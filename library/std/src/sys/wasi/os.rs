@@ -1,32 +1,26 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use crate::any::Any;
+use crate::sync::{Mutex, MutexGuard};
 use crate::error::Error as StdError;
 use crate::ffi::{CStr, CString, OsStr, OsString};
 use crate::fmt;
 use crate::io;
-use crate::marker::PhantomData;
 use crate::os::wasi::prelude::*;
+use crate::iter;
+use crate::slice;
 use crate::path::{self, PathBuf};
 use crate::str;
 use crate::sys::memchr;
-use crate::sys::unsupported;
 use crate::vec;
 
-// Add a few symbols not in upstream `libc` just yet.
-mod libc {
-    pub use libc::*;
+use super::err2io;
 
-    extern "C" {
-        pub fn getcwd(buf: *mut c_char, size: size_t) -> *mut c_char;
-        pub fn chdir(dir: *const c_char) -> c_int;
-    }
-}
+const PATH_SEPARATOR: u8 = b':';
 
-#[cfg(not(target_feature = "atomics"))]
-pub unsafe fn env_lock() -> impl Any {
-    // No need for a lock if we're single-threaded, but this function will need
-    // to get implemented for multi-threaded scenarios
+static ENV_LOCK: Mutex::<()> = Mutex::new(());
+
+pub fn env_lock<'a>() -> MutexGuard<'a, ()> {
+    ENV_LOCK.lock().unwrap()
 }
 
 pub fn errno() -> i32 {
@@ -51,27 +45,15 @@ pub fn error_string(errno: i32) -> String {
 }
 
 pub fn getcwd() -> io::Result<PathBuf> {
-    let mut buf = Vec::with_capacity(512);
+    let mut buf = Vec::with_capacity(1024);
     loop {
         unsafe {
-            let ptr = buf.as_mut_ptr() as *mut libc::c_char;
-            if !libc::getcwd(ptr, buf.capacity()).is_null() {
-                let len = CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_bytes().len();
-                buf.set_len(len);
-                buf.shrink_to_fit();
-                return Ok(PathBuf::from(OsString::from_vec(buf)));
-            } else {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ERANGE) {
-                    return Err(error);
-                }
-            }
-
-            // Trigger the internal buffer resizing logic of `Vec` by requiring
-            // more space than the current capacity.
-            let cap = buf.capacity();
-            buf.set_len(cap);
-            buf.reserve(1);
+            let ptr = buf.as_mut_ptr() as *mut u8;
+            let len = wasi::getcwd(ptr, buf.capacity())
+                .map_err(err2io)?;
+            buf.set_len(len);
+            buf.shrink_to_fit();
+            return Ok(PathBuf::from(OsString::from_vec(buf)));
         }
     }
 }
@@ -87,46 +69,76 @@ pub fn chdir(p: &path::Path) -> io::Result<()> {
     }
 }
 
-pub struct SplitPaths<'a>(!, PhantomData<&'a ()>);
+pub struct SplitPaths<'a> {
+    iter: iter::Map<slice::Split<'a, u8, fn(&u8) -> bool>, fn(&'a [u8]) -> PathBuf>,
+}
 
-pub fn split_paths(_unparsed: &OsStr) -> SplitPaths<'_> {
-    panic!("unsupported")
+pub fn split_paths(unparsed: &OsStr) -> SplitPaths<'_> {
+    fn bytes_to_path(b: &[u8]) -> PathBuf {
+        PathBuf::from(<OsStr as OsStrExt>::from_bytes(b))
+    }
+    fn is_separator(b: &u8) -> bool {
+        *b == PATH_SEPARATOR
+    }
+    let unparsed = unparsed.as_bytes();
+    SplitPaths {
+        iter: unparsed
+            .split(is_separator as fn(&u8) -> bool)
+            .map(bytes_to_path as fn(&[u8]) -> PathBuf),
+    }
 }
 
 impl<'a> Iterator for SplitPaths<'a> {
     type Item = PathBuf;
     fn next(&mut self) -> Option<PathBuf> {
-        self.0
+        self.iter.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
     }
 }
 
 #[derive(Debug)]
 pub struct JoinPathsError;
 
-pub fn join_paths<I, T>(_paths: I) -> Result<OsString, JoinPathsError>
+pub fn join_paths<I, T>(paths: I) -> Result<OsString, JoinPathsError>
 where
     I: Iterator<Item = T>,
     T: AsRef<OsStr>,
 {
-    Err(JoinPathsError)
+    let mut joined = Vec::new();
+
+    for (i, path) in paths.enumerate() {
+        let path = path.as_ref().as_bytes();
+        if i > 0 {
+            joined.push(PATH_SEPARATOR)
+        }
+        if path.contains(&PATH_SEPARATOR) {
+            return Err(JoinPathsError);
+        }
+        joined.extend_from_slice(path);
+    }
+    Ok(OsStringExt::from_vec(joined))
 }
 
 impl fmt::Display for JoinPathsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        "not supported on wasm yet".fmt(f)
+        write!(f, "path segment contains separator `{}`", char::from(PATH_SEPARATOR))
     }
 }
 
 impl StdError for JoinPathsError {
     #[allow(deprecated)]
     fn description(&self) -> &str {
-        "not supported on wasm yet"
+        "failed to join paths"
     }
 }
 
 pub fn current_exe() -> io::Result<PathBuf> {
-    unsupported()
+    use crate::io::ErrorKind;
+    Err(io::const_io_error!(ErrorKind::Unsupported, "Not yet implemented!"))
 }
+
 pub struct Env {
     iter: vec::IntoIter<(OsString, OsString)>,
 }
@@ -208,7 +220,9 @@ pub fn unsetenv(n: &OsStr) -> io::Result<()> {
 }
 
 pub fn temp_dir() -> PathBuf {
-    panic!("no filesystem on wasm")
+    crate::env::var_os("TMPDIR").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from("/tmp")
+    })
 }
 
 pub fn home_dir() -> Option<PathBuf> {
@@ -220,7 +234,10 @@ pub fn exit(code: i32) -> ! {
 }
 
 pub fn getpid() -> u32 {
-    panic!("unsupported");
+    wasi::getpid()
+        .map(|a| a as u32)
+        .map_err(err2io)
+        .unwrap_or_default(0u32)
 }
 
 #[doc(hidden)]

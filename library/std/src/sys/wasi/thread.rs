@@ -7,14 +7,41 @@ use crate::num::NonZeroUsize;
 use crate::sys::unsupported;
 use crate::time::Duration;
 
-pub struct Thread(!);
-
 pub const DEFAULT_MIN_STACK_SIZE: usize = 4096;
 
+pub struct Thread
+{
+    handle: wasi::Tid,
+}
+
 impl Thread {
-    // unsafe: see thread::Builder::spawn_unchecked for safety requirements
+    #[cfg(not(target_feature = "atomics"))]
     pub unsafe fn new(_stack: usize, _p: Box<dyn FnOnce()>) -> io::Result<Thread> {
         unsupported()
+    }
+
+    #[cfg(target_feature = "atomics")]
+    pub unsafe fn new(_stack: usize, p: Box<dyn FnOnce()>) -> io::Result<Thread> {
+        unsafe {
+            let r = p as *mut _;
+            std::mem::forget(p);
+            let handle = wasi::thread_spawn("thread_start", r as u64, wasi::Bool::False)
+                .map_err(err2io)?;
+            Ok(
+                Thread {
+                    handle
+                }
+            )
+        }
+    }
+
+    #[cfg(target_feature = "atomics")]
+    extern "C" fn thread_start(entry: u64) {
+        unsafe {
+            let p = entry as *mut Box<dyn FnOnce()>;
+            let p = Box::from_raw(p);
+            p();
+        }
     }
 
     pub fn yield_now() {
@@ -62,10 +89,34 @@ impl Thread {
     }
 
     pub fn join(self) {
-        self.0
+        unsafe {
+            let ret = wasi::thread_join(self.handle);
+            mem::forget(self);
+            assert!(ret == 0, "failed to join thread: {}", io::Error::from_raw_os_error(ret));
+        }
+    }
+
+    pub fn id(&self) -> u32 {
+        self.handle
+    }
+
+    pub fn into_id(self) -> u32 {
+        let id = self.handle;
+        mem::forget(self);
+        id
     }
 }
 
+#[cfg(target_feature = "atomics")]
+pub fn available_parallelism() -> io::Result<NonZeroUsize> {
+    unsafe {
+        Ok (
+            wasi::thread_parallelism().map_err(err2io)?
+        )
+    }
+}
+
+#[cfg(not(target_feature = "atomics"))]
 pub fn available_parallelism() -> io::Result<NonZeroUsize> {
     unsupported()
 }

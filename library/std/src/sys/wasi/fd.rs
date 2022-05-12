@@ -10,17 +10,17 @@ use crate::sys_common::{AsInner, AsInnerMut, FromInner, IntoInner};
 
 #[derive(Debug)]
 pub struct WasiFd {
-    fd: OwnedFd,
+    pub(super) fd: OwnedFd,
 }
 
-fn iovec<'a>(a: &'a mut [IoSliceMut<'_>]) -> &'a [wasi::Iovec] {
+pub(super) fn iovec<'a>(a: &'a mut [IoSliceMut<'_>]) -> &'a [wasi::Iovec] {
     assert_eq!(mem::size_of::<IoSliceMut<'_>>(), mem::size_of::<wasi::Iovec>());
     assert_eq!(mem::align_of::<IoSliceMut<'_>>(), mem::align_of::<wasi::Iovec>());
     // SAFETY: `IoSliceMut` and `IoVec` have exactly the same memory layout
     unsafe { mem::transmute(a) }
 }
 
-fn ciovec<'a>(a: &'a [IoSlice<'_>]) -> &'a [wasi::Ciovec] {
+pub(super) fn ciovec<'a>(a: &'a [IoSlice<'_>]) -> &'a [wasi::Ciovec] {
     assert_eq!(mem::size_of::<IoSlice<'_>>(), mem::size_of::<wasi::Ciovec>());
     assert_eq!(mem::align_of::<IoSlice<'_>>(), mem::align_of::<wasi::Ciovec>());
     // SAFETY: `IoSlice` and `CIoVec` have exactly the same memory layout
@@ -229,7 +229,10 @@ impl WasiFd {
     }
 
     pub fn sock_accept(&self, flags: wasi::Fdflags) -> io::Result<wasi::Fd> {
-        unsafe { wasi::sock_accept(self.as_raw_fd() as wasi::Fd, flags).map_err(err2io) }
+        let ret = unsafe {
+            wasi::sock_accept(self.as_raw_fd() as wasi::Fd, flags).map_err(err2io)?
+        };
+        Ok(ret.0)
     }
 
     pub fn sock_recv(
