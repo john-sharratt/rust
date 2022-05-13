@@ -115,6 +115,7 @@ impl SimpleMessage {
 
 /// Create and return an `io::Error` for a given `ErrorKind` and constant
 /// message. This doesn't allocate.
+#[allow(dead_code)]
 pub(crate) macro const_io_error($kind:expr, $message:expr $(,)?) {
     $crate::io::error::Error::from_static_message({
         const MESSAGE_DATA: $crate::io::error::SimpleMessage =

@@ -305,6 +305,6 @@ impl IntoRawFd for WasiFd {
 
 impl FromRawFd for WasiFd {
     unsafe fn from_raw_fd(raw_fd: RawFd) -> Self {
-        unsafe { Self { fd: FromRawFd::from_raw_fd(raw_fd) } }
+        unsafe { Self { fd: OwnedFd::from_raw_fd(raw_fd) } }
     }
 }

@@ -7,6 +7,8 @@ use crate::num::NonZeroUsize;
 use crate::sys::unsupported;
 use crate::time::Duration;
 
+use super::err2io;
+
 pub const DEFAULT_MIN_STACK_SIZE: usize = 4096;
 
 pub struct Thread
@@ -90,16 +92,18 @@ impl Thread {
 
     pub fn join(self) {
         unsafe {
-            let ret = wasi::thread_join(self.handle);
+            let ret = wasi::thread_join(self.handle).map_err(err2io);
             mem::forget(self);
-            assert!(ret == 0, "failed to join thread: {}", io::Error::from_raw_os_error(ret));
+            assert!(ret.is_ok(), "failed to join thread: {}", ret.unwrap_err());
         }
     }
 
+    #[allow(dead_code)]
     pub fn id(&self) -> u32 {
         self.handle
     }
 
+    #[allow(dead_code)]
     pub fn into_id(self) -> u32 {
         let id = self.handle;
         mem::forget(self);
