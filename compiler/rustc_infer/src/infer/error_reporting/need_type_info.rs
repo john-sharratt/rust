@@ -739,7 +739,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 {
                     let mut eraser = TypeParamEraser(self.tcx);
                     let candidate_len = impl_candidates.len();
-                    let mut suggestions: Vec<_> = impl_candidates.iter().map(|candidate| {
+                    let mut suggestions: Vec<_> = impl_candidates.iter().filter_map(|candidate| {
                         let trait_item = self.tcx
                             .associated_items(candidate.def_id)
                             .find_by_name_and_kind(
@@ -748,6 +748,9 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                                 ty::AssocKind::Fn,
                                 candidate.def_id
                             );
+                        if trait_item.is_none() {
+                            return None;
+                        }
                         let prefix = if let Some(trait_item) = trait_item
                             && let Some(trait_m) = trait_item.def_id.as_local()
                             && let hir::TraitItemKind::Fn(fn_, _) = &self.tcx.hir().trait_item(hir::TraitItemId { def_id: trait_m }).kind
@@ -761,24 +764,26 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                             ""
                         };
                         let candidate = candidate.super_fold_with(&mut eraser);
-                        vec![
+                        Some(vec![
                             (expr.span.shrink_to_lo(), format!("{}::{}({}", candidate, segment.ident, prefix)),
                             if exprs.len() == 1 {
                                 (expr.span.shrink_to_hi().with_hi(e.span.hi()), ")".to_string())
                             } else {
                                 (expr.span.shrink_to_hi().with_hi(exprs[1].span.lo()), ", ".to_string())
                             },
-                        ]
+                        ])
                     }).collect();
                     suggestions.sort_by(|a, b| a[0].1.cmp(&b[0].1));
-                    err.multipart_suggestions(
-                        &format!(
-                            "use the fully qualified path for the potential candidate{}",
-                            pluralize!(candidate_len),
-                        ),
-                        suggestions.into_iter(),
-                        Applicability::MaybeIncorrect,
-                    );
+                    if !suggestions.is_empty() {
+                        err.multipart_suggestions(
+                            &format!(
+                                "use the fully qualified path for the potential candidate{}",
+                                pluralize!(candidate_len),
+                            ),
+                            suggestions.into_iter(),
+                            Applicability::MaybeIncorrect,
+                        );
+                    }
                 }
                 // Suggest specifying type params or point out the return type of the call:
                 //
@@ -861,6 +866,7 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                 }
             }
 
+            self.report_ambiguous_type_parameter(&mut err, arg);
             err.span_label(
                 span,
                 arg_data.cannot_infer_msg(use_diag.filter(|d| d.applies_to(span))),
@@ -924,6 +930,28 @@ impl<'a, 'tcx> InferCtxt<'a, 'tcx> {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    fn report_ambiguous_type_parameter(&self, err: &mut Diagnostic, arg: GenericArg<'tcx>) {
+        if let GenericArgKind::Type(ty) = arg.unpack()
+            && let ty::Infer(ty::TyVar(ty_vid)) = *ty.kind()
+        {
+            let mut inner = self.inner.borrow_mut();
+            let ty_vars = &inner.type_variables();
+            let var_origin = ty_vars.var_origin(ty_vid);
+            if let TypeVariableOriginKind::TypeParameterDefinition(_, Some(def_id)) =
+                var_origin.kind
+                && let Some(parent_def_id) = self.tcx.parent(def_id).as_local()
+                && let Some(node) = self.tcx.hir().find_by_def_id(parent_def_id)
+            {
+                match node {
+                    hir::Node::Item(item) if matches!(item.kind, hir::ItemKind::Impl(_) | hir::ItemKind::Fn(..)) => (),
+                    hir::Node::ImplItem(impl_item) if matches!(impl_item.kind, hir::ImplItemKind::Fn(..)) => (),
+                    _ => return,
+                }
+                err.span_help(self.tcx.def_span(def_id), "type parameter declared here");
             }
         }
     }

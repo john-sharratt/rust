@@ -312,11 +312,7 @@ impl<'mir, 'tcx> Checker<'mir, 'tcx> {
 
             Status::Unstable(gate) if self.tcx.features().enabled(gate) => {
                 let unstable_in_stable = self.ccx.is_const_stable_const_fn()
-                    && !super::rustc_allow_const_fn_unstable(
-                        self.tcx,
-                        self.def_id().to_def_id(),
-                        gate,
-                    );
+                    && !super::rustc_allow_const_fn_unstable(self.tcx, self.def_id(), gate);
                 if unstable_in_stable {
                     emit_unstable_in_stable_error(self.ccx, span, gate);
                 }
@@ -706,14 +702,12 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
 
     #[instrument(level = "debug", skip(self))]
     fn visit_terminator(&mut self, terminator: &Terminator<'tcx>, location: Location) {
-        use rustc_target::spec::abi::Abi::RustIntrinsic;
-
         self.super_terminator(terminator, location);
 
         match &terminator.kind {
             TerminatorKind::Call { func, args, fn_span, from_hir_call, .. } => {
                 let ConstCx { tcx, body, param_env, .. } = *self.ccx;
-                let caller = self.def_id().to_def_id();
+                let caller = self.def_id();
 
                 let fn_ty = func.ty(body, tcx);
 
@@ -797,7 +791,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                             // trait.
                             let callee_trait = tcx.trait_of_item(callee);
                             if callee_trait.is_some()
-                                && tcx.has_attr(caller, sym::default_method_body_is_const)
+                                && tcx.has_attr(caller.to_def_id(), sym::default_method_body_is_const)
                                 && callee_trait == tcx.trait_of_item(caller)
                                 // Can only call methods when it's `<Self as TheTrait>::f`.
                                 && tcx.types.self_param == substs.type_at(0)
@@ -889,7 +883,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'_, 'tcx> {
                     return;
                 }
 
-                let is_intrinsic = tcx.fn_sig(callee).abi() == RustIntrinsic;
+                let is_intrinsic = tcx.is_intrinsic(callee);
 
                 if !tcx.is_const_fn_raw(callee) {
                     if tcx.trait_of_item(callee).is_some() {

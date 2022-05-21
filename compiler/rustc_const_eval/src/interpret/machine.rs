@@ -133,9 +133,11 @@ pub trait Machine<'mir, 'tcx>: Sized {
     /// Whether to enforce the validity invariant
     fn enforce_validity(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
 
-    /// Whether to enforce validity (e.g., initialization and not having ptr provenance)
-    /// of integers and floats.
-    fn enforce_number_validity(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
+    /// Whether to enforce integers and floats being initialized.
+    fn enforce_number_init(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
+
+    /// Whether to enforce integers and floats not having provenance.
+    fn enforce_number_no_provenance(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool;
 
     /// Whether function calls should be [ABI](Abi)-checked.
     fn enforce_abi(_ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
@@ -286,19 +288,36 @@ pub trait Machine<'mir, 'tcx>: Sized {
     ) -> Pointer<Self::PointerTag>;
 
     /// "Int-to-pointer cast"
-    fn ptr_from_addr(
+    fn ptr_from_addr_cast(
         ecx: &InterpCx<'mir, 'tcx, Self>,
         addr: u64,
     ) -> Pointer<Option<Self::PointerTag>>;
+
+    // FIXME: Transmuting an integer to a pointer should just always return a `None`
+    // provenance, but that causes problems with function pointers in Miri.
+    /// Hook for returning a pointer from a transmute-like operation on an addr.
+    fn ptr_from_addr_transmute(
+        ecx: &InterpCx<'mir, 'tcx, Self>,
+        addr: u64,
+    ) -> Pointer<Option<Self::PointerTag>>;
+
+    /// Marks a pointer as exposed, allowing it's provenance
+    /// to be recovered. "Pointer-to-int cast"
+    fn expose_ptr(
+        ecx: &mut InterpCx<'mir, 'tcx, Self>,
+        ptr: Pointer<Self::PointerTag>,
+    ) -> InterpResult<'tcx>;
 
     /// Convert a pointer with provenance into an allocation-offset pair
     /// and extra provenance info.
     ///
     /// The returned `AllocId` must be the same as `ptr.provenance.get_alloc_id()`.
+    ///
+    /// When this fails, that means the pointer does not point to a live allocation.
     fn ptr_get_alloc(
         ecx: &InterpCx<'mir, 'tcx, Self>,
         ptr: Pointer<Self::PointerTag>,
-    ) -> (AllocId, Size, Self::TagExtra);
+    ) -> Option<(AllocId, Size, Self::TagExtra)>;
 
     /// Called to initialize the "extra" state of an allocation and make the pointers
     /// it contains (in relocations) tagged.  The way we construct allocations is
@@ -436,7 +455,12 @@ pub macro compile_time_machine(<$mir: lifetime, $tcx: lifetime>) {
     }
 
     #[inline(always)]
-    fn enforce_number_validity(_ecx: &InterpCx<$mir, $tcx, Self>) -> bool {
+    fn enforce_number_init(_ecx: &InterpCx<$mir, $tcx, Self>) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn enforce_number_no_provenance(_ecx: &InterpCx<$mir, $tcx, Self>) -> bool {
         true
     }
 
@@ -480,7 +504,18 @@ pub macro compile_time_machine(<$mir: lifetime, $tcx: lifetime>) {
     }
 
     #[inline(always)]
-    fn ptr_from_addr(_ecx: &InterpCx<$mir, $tcx, Self>, addr: u64) -> Pointer<Option<AllocId>> {
+    fn ptr_from_addr_transmute(
+        _ecx: &InterpCx<$mir, $tcx, Self>,
+        addr: u64,
+    ) -> Pointer<Option<AllocId>> {
+        Pointer::new(None, Size::from_bytes(addr))
+    }
+
+    #[inline(always)]
+    fn ptr_from_addr_cast(
+        _ecx: &InterpCx<$mir, $tcx, Self>,
+        addr: u64,
+    ) -> Pointer<Option<AllocId>> {
         Pointer::new(None, Size::from_bytes(addr))
     }
 
@@ -488,9 +523,9 @@ pub macro compile_time_machine(<$mir: lifetime, $tcx: lifetime>) {
     fn ptr_get_alloc(
         _ecx: &InterpCx<$mir, $tcx, Self>,
         ptr: Pointer<AllocId>,
-    ) -> (AllocId, Size, Self::TagExtra) {
+    ) -> Option<(AllocId, Size, Self::TagExtra)> {
         // We know `offset` is relative to the allocation, so we can use `into_parts`.
         let (alloc_id, offset) = ptr.into_parts();
-        (alloc_id, offset, ())
+        Some((alloc_id, offset, ()))
     }
 }

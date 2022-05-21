@@ -32,6 +32,7 @@ use crate::sys_common::{AsInner, FromInner, IntoInner};
 // 32-bit c_int. Below is -2, in two's complement, but that only works out
 // because c_int is 32 bits.
 #[rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)]
+#[rustc_nonnull_optimization_guaranteed]
 #[unstable(feature = "io_safety", issue = "87074")]
 pub struct BorrowedFd<'fd> {
     fd: RawFd,
@@ -52,6 +53,7 @@ pub struct BorrowedFd<'fd> {
 // 32-bit c_int. Below is -2, in two's complement, but that only works out
 // because c_int is 32 bits.
 #[rustc_layout_scalar_valid_range_end(0xFF_FF_FF_FE)]
+#[rustc_nonnull_optimization_guaranteed]
 #[unstable(feature = "io_safety", issue = "87074")]
 pub struct OwnedFd {
     fd: RawFd,
@@ -66,8 +68,8 @@ impl BorrowedFd<'_> {
     /// the returned `BorrowedFd`, and it must not have the value `-1`.
     #[inline]
     #[unstable(feature = "io_safety", issue = "87074")]
-    pub unsafe fn borrow_raw(fd: RawFd) -> Self {
-        assert_ne!(fd, u32::MAX as RawFd);
+    pub const unsafe fn borrow_raw(fd: RawFd) -> Self {
+        assert!(fd != u32::MAX as RawFd);
         // SAFETY: we just asserted that the value is in the valid range and isn't `-1` (the only value bigger than `0xFF_FF_FF_FE` unsigned)
         unsafe { Self { fd, _phantom: PhantomData } }
     }

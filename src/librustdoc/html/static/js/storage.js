@@ -100,15 +100,10 @@ function onEachLazy(lazyArray, func, reversed) {
         reversed);
 }
 
-// eslint-disable-next-line no-unused-vars
-function hasOwnPropertyRustdoc(obj, property) {
-    return Object.prototype.hasOwnProperty.call(obj, property);
-}
-
 function updateLocalStorage(name, value) {
     try {
         window.localStorage.setItem("rustdoc-" + name, value);
-    } catch(e) {
+    } catch (e) {
         // localStorage is not accessible, do nothing
     }
 }
@@ -116,7 +111,7 @@ function updateLocalStorage(name, value) {
 function getCurrentValue(name) {
     try {
         return window.localStorage.getItem("rustdoc-" + name);
-    } catch(e) {
+    } catch (e) {
         return null;
     }
 }

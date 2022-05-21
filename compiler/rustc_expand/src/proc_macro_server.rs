@@ -184,7 +184,7 @@ impl FromInternal<(TreeAndSpacing, &'_ mut Vec<Self>, &mut Rustc<'_, '_>)>
                     delimiter: pm::Delimiter::None,
                     stream,
                     span: DelimSpan::from_single(span),
-                    flatten: crate::base::pretty_printing_compatibility_hack(&nt, rustc.sess()),
+                    flatten: crate::base::nt_pretty_printing_compatibility_hack(&nt, rustc.sess()),
                 })
             }
 
@@ -484,7 +484,7 @@ impl server::TokenStream for Rustc<'_, '_> {
         tree.to_internal()
     }
     fn into_iter(&mut self, stream: Self::TokenStream) -> Self::TokenStreamIter {
-        TokenStreamIter { cursor: stream.trees(), stack: vec![] }
+        TokenStreamIter { cursor: stream.into_trees(), stack: vec![] }
     }
 }
 

@@ -929,16 +929,6 @@ pub struct Stmt {
 }
 
 impl Stmt {
-    pub fn tokens(&self) -> Option<&LazyTokenStream> {
-        match self.kind {
-            StmtKind::Local(ref local) => local.tokens.as_ref(),
-            StmtKind::Item(ref item) => item.tokens.as_ref(),
-            StmtKind::Expr(ref expr) | StmtKind::Semi(ref expr) => expr.tokens.as_ref(),
-            StmtKind::Empty => None,
-            StmtKind::MacCall(ref mac) => mac.tokens.as_ref(),
-        }
-    }
-
     pub fn has_trailing_semicolon(&self) -> bool {
         match &self.kind {
             StmtKind::Semi(_) => true,
@@ -1986,6 +1976,8 @@ pub struct BareFnTy {
     pub ext: Extern,
     pub generic_params: Vec<GenericParam>,
     pub decl: P<FnDecl>,
+    /// Span of the `fn(...) -> ...` part.
+    pub decl_span: Span,
 }
 
 /// The various kinds of type recognized by the compiler.
@@ -2681,13 +2673,6 @@ impl Item {
     /// Return the span that encompasses the attributes.
     pub fn span_with_attributes(&self) -> Span {
         self.attrs.iter().fold(self.span, |acc, attr| acc.to(attr.span))
-    }
-}
-
-impl<K: Into<ItemKind>> Item<K> {
-    pub fn into_item(self) -> Item {
-        let Item { attrs, id, span, vis, ident, kind, tokens } = self;
-        Item { attrs, id, span, vis, ident, kind: kind.into(), tokens }
     }
 }
 

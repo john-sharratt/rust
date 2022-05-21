@@ -59,7 +59,7 @@ use rustc_span::{Span, DUMMY_SP};
 use smallvec::{smallvec, SmallVec};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
-use std::{cmp, fmt, mem, ptr};
+use std::{cmp, fmt, ptr};
 use tracing::debug;
 
 use diagnostics::{ImportSuggestion, LabelSuggestion, Suggestion};
@@ -966,8 +966,6 @@ pub struct Resolver<'a> {
     registered_attrs: FxHashSet<Ident>,
     registered_tools: RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, &'a NameBinding<'a>>,
-    /// FIXME: The only user of this is a doc link resolution hack for rustdoc.
-    all_macro_rules: FxHashMap<Symbol, Res>,
     macro_map: FxHashMap<DefId, Lrc<SyntaxExtension>>,
     dummy_ext_bang: Lrc<SyntaxExtension>,
     dummy_ext_derive: Lrc<SyntaxExtension>,
@@ -975,6 +973,7 @@ pub struct Resolver<'a> {
     local_macro_def_scopes: FxHashMap<LocalDefId, Module<'a>>,
     ast_transform_scopes: FxHashMap<LocalExpnId, Module<'a>>,
     unused_macros: FxHashMap<LocalDefId, (NodeId, Ident)>,
+    unused_macro_rules: FxHashMap<(LocalDefId, usize), (Ident, Span)>,
     proc_macro_stubs: FxHashSet<LocalDefId>,
     /// Traces collected during macro resolution and validated when it's complete.
     single_segment_macro_resolutions:
@@ -1359,7 +1358,6 @@ impl<'a> Resolver<'a> {
             registered_attrs,
             registered_tools,
             macro_use_prelude: FxHashMap::default(),
-            all_macro_rules: Default::default(),
             macro_map: FxHashMap::default(),
             dummy_ext_bang: Lrc::new(SyntaxExtension::dummy_bang(session.edition())),
             dummy_ext_derive: Lrc::new(SyntaxExtension::dummy_derive(session.edition())),
@@ -1374,6 +1372,7 @@ impl<'a> Resolver<'a> {
             potentially_unused_imports: Vec::new(),
             struct_constructors: Default::default(),
             unused_macros: Default::default(),
+            unused_macro_rules: Default::default(),
             proc_macro_stubs: Default::default(),
             single_segment_macro_resolutions: Default::default(),
             multi_segment_macro_resolutions: Default::default(),
@@ -1910,11 +1909,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    // For rustdoc.
-    pub fn take_all_macro_rules(&mut self) -> FxHashMap<Symbol, Res> {
-        mem::take(&mut self.all_macro_rules)
-    }
-
     /// For rustdoc.
     /// For local modules returns only reexports, for external modules returns all children.
     pub fn module_children_or_reexports(&self, def_id: DefId) -> Vec<ModChild> {
@@ -1926,8 +1920,12 @@ impl<'a> Resolver<'a> {
     }
 
     /// For rustdoc.
-    pub fn macro_rules_scope(&self, def_id: LocalDefId) -> MacroRulesScopeRef<'a> {
-        *self.macro_rules_scopes.get(&def_id).expect("not a `macro_rules` item")
+    pub fn macro_rules_scope(&self, def_id: LocalDefId) -> (MacroRulesScopeRef<'a>, Res) {
+        let scope = *self.macro_rules_scopes.get(&def_id).expect("not a `macro_rules` item");
+        match scope.get() {
+            MacroRulesScope::Binding(mb) => (scope, mb.binding.res()),
+            _ => unreachable!(),
+        }
     }
 
     /// Retrieves the span of the given `DefId` if `DefId` is in the local crate.

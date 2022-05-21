@@ -238,7 +238,6 @@ pub(super) fn write_shared(
         write_toolchain("favicon-16x16.png", static_files::RUST_FAVICON_PNG_16)?;
         write_toolchain("favicon-32x32.png", static_files::RUST_FAVICON_PNG_32)?;
     }
-    write_toolchain("brush.svg", static_files::BRUSH_SVG)?;
     write_toolchain("wheel.svg", static_files::WHEEL_SVG)?;
     write_toolchain("clipboard.svg", static_files::CLIPBOARD_SVG)?;
     write_toolchain("down-arrow.svg", static_files::DOWN_ARROW_SVG)?;
@@ -417,7 +416,7 @@ pub(super) fn write_shared(
             ));
             all_sources.sort();
             Ok(format!(
-                "var N = null;var sourcesIndex = {{}};\n{}\ncreateSourceSidebar();\n",
+                "var sourcesIndex = {{}};\n{}\ncreateSourceSidebar();\n",
                 all_sources.join("\n")
             )
             .into_bytes())
@@ -439,7 +438,13 @@ pub(super) fn write_shared(
     write_crate("search-index.js", &|| {
         let mut v = String::from("var searchIndex = JSON.parse('{\\\n");
         v.push_str(&all_indexes.join(",\\\n"));
-        v.push_str("\\\n}');\nif (window.initSearch) {window.initSearch(searchIndex)};");
+        v.push_str(
+            r#"\
+}');
+if (typeof window !== 'undefined' && window.initSearch) {window.initSearch(searchIndex)};
+if (typeof exports !== 'undefined') {exports.searchIndex = searchIndex};
+"#,
+        );
         Ok(v.into_bytes())
     })?;
 

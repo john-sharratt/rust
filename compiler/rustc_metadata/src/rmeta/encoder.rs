@@ -14,7 +14,6 @@ use rustc_hir::def_id::{
 };
 use rustc_hir::definitions::DefPathData;
 use rustc_hir::intravisit::{self, Visitor};
-use rustc_hir::itemlikevisit::ItemLikeVisitor;
 use rustc_hir::lang_items;
 use rustc_hir::{AnonConst, GenericParamKind};
 use rustc_index::bit_set::GrowableBitSet;
@@ -25,7 +24,6 @@ use rustc_middle::middle::exported_symbols::{
     metadata_symbol_name, ExportedSymbol, SymbolExportInfo,
 };
 use rustc_middle::mir::interpret;
-use rustc_middle::thir;
 use rustc_middle::traits::specialization_graph;
 use rustc_middle::ty::codec::TyEncoder;
 use rustc_middle::ty::fast_reject::{self, SimplifiedType, TreatParams};
@@ -34,18 +32,14 @@ use rustc_middle::ty::{self, SymbolName, Ty, TyCtxt};
 use rustc_serialize::{opaque, Encodable, Encoder};
 use rustc_session::config::CrateType;
 use rustc_session::cstore::{ForeignModule, LinkagePreference, NativeLib};
+use rustc_span::hygiene::{ExpnIndex, HygieneEncodeContext, MacroKind};
 use rustc_span::symbol::{sym, Ident, Symbol};
 use rustc_span::{
     self, DebuggerVisualizerFile, ExternalSource, FileName, SourceFile, Span, SyntaxContext,
 };
-use rustc_span::{
-    hygiene::{ExpnIndex, HygieneEncodeContext, MacroKind},
-    RealFileName,
-};
 use rustc_target::abi::VariantIdx;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
-use std::path::Path;
 use tracing::{debug, trace};
 
 pub(super) struct EncodeContext<'a, 'tcx> {
@@ -351,18 +345,6 @@ impl<'a, 'tcx> TyEncoder<'tcx> for EncodeContext<'a, 'tcx> {
     }
 }
 
-impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for &'tcx [thir::abstract_const::Node<'tcx>] {
-    fn encode(&self, s: &mut EncodeContext<'a, 'tcx>) -> opaque::EncodeResult {
-        (**self).encode(s)
-    }
-}
-
-impl<'a, 'tcx> Encodable<EncodeContext<'a, 'tcx>> for &'tcx [(ty::Predicate<'tcx>, Span)] {
-    fn encode(&self, s: &mut EncodeContext<'a, 'tcx>) -> opaque::EncodeResult {
-        (**self).encode(s)
-    }
-}
-
 /// Helper trait to allow overloading `EncodeContext::lazy` for iterators.
 trait EncodeContentsForLazy<'a, 'tcx, T: ?Sized + LazyMeta> {
     fn encode_contents_for_lazy(self, ecx: &mut EncodeContext<'a, 'tcx>) -> T::Meta;
@@ -453,7 +435,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             return;
         }
 
-        self.tcx.hir().visit_all_item_likes(&mut self.as_deep_visitor());
+        self.tcx.hir().deep_visit_all_item_likes(self);
     }
 
     fn encode_def_path_table(&mut self) {
@@ -491,6 +473,8 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         // is done.
         let required_source_files = self.required_source_files.take().unwrap();
 
+        let working_directory = &self.tcx.sess.opts.working_dir;
+
         let adapted = all_source_files
             .iter()
             .enumerate()
@@ -503,66 +487,40 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 (!source_file.is_imported() || self.is_proc_macro)
             })
             .map(|(_, source_file)| {
-                let mut adapted = match source_file.name {
-                    FileName::Real(ref realname) => {
-                        let mut adapted = (**source_file).clone();
-                        adapted.name = FileName::Real(match realname {
-                            RealFileName::LocalPath(path_to_file) => {
-                                // Prepend path of working directory onto potentially
-                                // relative paths, because they could become relative
-                                // to a wrong directory.
-                                // We include `working_dir` as part of the crate hash,
-                                // so it's okay for us to use it as part of the encoded
-                                // metadata.
-                                let working_dir = &self.tcx.sess.opts.working_dir;
-                                match working_dir {
-                                    RealFileName::LocalPath(absolute) => {
-                                        // Although neither working_dir or the file name were subject
-                                        // to path remapping, the concatenation between the two may
-                                        // be. Hence we need to do a remapping here.
-                                        let joined = Path::new(absolute).join(path_to_file);
-                                        let (joined, remapped) =
-                                            source_map.path_mapping().map_prefix(joined);
-                                        if remapped {
-                                            RealFileName::Remapped {
-                                                local_path: None,
-                                                virtual_name: joined,
-                                            }
-                                        } else {
-                                            RealFileName::LocalPath(joined)
-                                        }
-                                    }
-                                    RealFileName::Remapped { local_path: _, virtual_name } => {
-                                        // If working_dir has been remapped, then we emit
-                                        // Remapped variant as the expanded path won't be valid
-                                        RealFileName::Remapped {
-                                            local_path: None,
-                                            virtual_name: Path::new(virtual_name)
-                                                .join(path_to_file),
-                                        }
-                                    }
-                                }
-                            }
-                            RealFileName::Remapped { local_path: _, virtual_name } => {
-                                RealFileName::Remapped {
-                                    // We do not want any local path to be exported into metadata
-                                    local_path: None,
-                                    virtual_name: virtual_name.clone(),
-                                }
-                            }
-                        });
-                        adapted.name_hash = {
-                            let mut hasher: StableHasher = StableHasher::new();
-                            adapted.name.hash(&mut hasher);
-                            hasher.finish::<u128>()
-                        };
-                        Lrc::new(adapted)
-                    }
+                // At export time we expand all source file paths to absolute paths because
+                // downstream compilation sessions can have a different compiler working
+                // directory, so relative paths from this or any other upstream crate
+                // won't be valid anymore.
+                //
+                // At this point we also erase the actual on-disk path and only keep
+                // the remapped version -- as is necessary for reproducible builds.
+                match source_file.name {
+                    FileName::Real(ref original_file_name) => {
+                        let adapted_file_name =
+                            source_map.path_mapping().to_embeddable_absolute_path(
+                                original_file_name.clone(),
+                                working_directory,
+                            );
 
+                        if adapted_file_name != *original_file_name {
+                            let mut adapted: SourceFile = (**source_file).clone();
+                            adapted.name = FileName::Real(adapted_file_name);
+                            adapted.name_hash = {
+                                let mut hasher: StableHasher = StableHasher::new();
+                                adapted.name.hash(&mut hasher);
+                                hasher.finish::<u128>()
+                            };
+                            Lrc::new(adapted)
+                        } else {
+                            // Nothing to adapt
+                            source_file.clone()
+                        }
+                    }
                     // expanded code, not from a file
                     _ => source_file.clone(),
-                };
-
+                }
+            })
+            .map(|mut source_file| {
                 // We're serializing this `SourceFile` into our crate metadata,
                 // so mark it as coming from this crate.
                 // This also ensures that we don't try to deserialize the
@@ -570,9 +528,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 // dependencies aren't loaded when we deserialize a proc-macro,
                 // trying to remap the `CrateNum` would fail.
                 if self.is_proc_macro {
-                    Lrc::make_mut(&mut adapted).cnum = LOCAL_CRATE;
+                    Lrc::make_mut(&mut source_file).cnum = LOCAL_CRATE;
                 }
-                adapted
+                source_file
             })
             .collect::<Vec<_>>();
 
@@ -985,11 +943,17 @@ fn should_encode_generics(def_kind: DefKind) -> bool {
 }
 
 impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
-    fn encode_attrs(&mut self, def_id: DefId) {
-        let attrs = self.tcx.get_attrs(def_id);
-        record!(self.tables.attributes[def_id] <- attrs);
-        if attrs.iter().any(|attr| attr.may_have_doc_links()) {
-            self.tables.may_have_doc_links.set(def_id.index, ());
+    fn encode_attrs(&mut self, def_id: LocalDefId) {
+        let mut attrs = self
+            .tcx
+            .hir()
+            .attrs(self.tcx.hir().local_def_id_to_hir_id(def_id))
+            .iter()
+            .filter(|attr| !rustc_feature::is_builtin_only_local(attr.name_or_empty()));
+
+        record!(self.tables.attributes[def_id.to_def_id()] <- attrs.clone());
+        if attrs.any(|attr| attr.may_have_doc_links()) {
+            self.tables.may_have_doc_links.set(def_id.local_def_index, ());
         }
     }
 
@@ -1005,7 +969,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
             let Some(def_kind) = def_kind else { continue };
             self.tables.opt_def_kind.set(def_id.index, def_kind);
             record!(self.tables.def_span[def_id] <- tcx.def_span(def_id));
-            self.encode_attrs(def_id);
+            self.encode_attrs(local_id);
             record!(self.tables.expn_that_defined[def_id] <- self.tcx.expn_that_defined(def_id));
             if def_kind.has_codegen_attrs() {
                 record!(self.tables.codegen_fn_attrs[def_id] <- self.tcx.codegen_fn_attrs(def_id));
@@ -1313,6 +1277,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         }
         if impl_item.kind == ty::AssocKind::Fn {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
+            if tcx.is_intrinsic(def_id) {
+                self.tables.is_intrinsic.set(def_id.index, ());
+            }
         }
     }
 
@@ -1557,6 +1524,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         }
         if let hir::ItemKind::Fn(..) = item.kind {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
+            if tcx.is_intrinsic(def_id) {
+                self.tables.is_intrinsic.set(def_id.index, ());
+            }
         }
         if let hir::ItemKind::Impl { .. } = item.kind {
             if let Some(trait_ref) = self.tcx.impl_trait_ref(def_id) {
@@ -1670,7 +1640,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
 
             self.tables.opt_def_kind.set(LOCAL_CRATE.as_def_id().index, DefKind::Mod);
             record!(self.tables.def_span[LOCAL_CRATE.as_def_id()] <- tcx.def_span(LOCAL_CRATE.as_def_id()));
-            self.encode_attrs(LOCAL_CRATE.as_def_id());
+            self.encode_attrs(LOCAL_CRATE.as_def_id().expect_local());
             record!(self.tables.visibility[LOCAL_CRATE.as_def_id()] <- tcx.visibility(LOCAL_CRATE.as_def_id()));
             if let Some(stability) = stability {
                 record!(self.tables.lookup_stability[LOCAL_CRATE.as_def_id()] <- stability);
@@ -1711,7 +1681,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 let def_id = id.to_def_id();
                 self.tables.opt_def_kind.set(def_id.index, DefKind::Macro(macro_kind));
                 record!(self.tables.kind[def_id] <- EntryKind::ProcMacro(macro_kind));
-                self.encode_attrs(def_id);
+                self.encode_attrs(id);
                 record!(self.tables.def_keys[def_id] <- def_key);
                 record!(self.tables.def_ident_span[def_id] <- span);
                 record!(self.tables.def_span[def_id] <- span);
@@ -1821,7 +1791,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     let simplified_self_ty = fast_reject::simplify_type(
                         self.tcx,
                         trait_ref.self_ty(),
-                        TreatParams::AsPlaceholders,
+                        TreatParams::AsInfer,
                     );
 
                     fx_hash_map
@@ -1953,6 +1923,9 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         self.encode_item_type(def_id);
         if let hir::ForeignItemKind::Fn(..) = nitem.kind {
             record!(self.tables.fn_sig[def_id] <- tcx.fn_sig(def_id));
+            if tcx.is_intrinsic(def_id) {
+                self.tables.is_intrinsic.set(def_id.index, ());
+            }
         }
     }
 }
@@ -2237,26 +2210,16 @@ pub fn provide(providers: &mut Providers) {
         traits_in_crate: |tcx, cnum| {
             assert_eq!(cnum, LOCAL_CRATE);
 
-            #[derive(Default)]
-            struct TraitsVisitor {
-                traits: Vec<DefId>,
-            }
-            impl ItemLikeVisitor<'_> for TraitsVisitor {
-                fn visit_item(&mut self, item: &hir::Item<'_>) {
-                    if let hir::ItemKind::Trait(..) | hir::ItemKind::TraitAlias(..) = item.kind {
-                        self.traits.push(item.def_id.to_def_id());
-                    }
+            let mut traits = Vec::new();
+            for id in tcx.hir().items() {
+                if matches!(tcx.def_kind(id.def_id), DefKind::Trait | DefKind::TraitAlias) {
+                    traits.push(id.def_id.to_def_id())
                 }
-                fn visit_trait_item(&mut self, _trait_item: &hir::TraitItem<'_>) {}
-                fn visit_impl_item(&mut self, _impl_item: &hir::ImplItem<'_>) {}
-                fn visit_foreign_item(&mut self, _foreign_item: &hir::ForeignItem<'_>) {}
             }
 
-            let mut visitor = TraitsVisitor::default();
-            tcx.hir().visit_all_item_likes(&mut visitor);
             // Bring everything into deterministic order.
-            visitor.traits.sort_by_cached_key(|&def_id| tcx.def_path_hash(def_id));
-            tcx.arena.alloc_slice(&visitor.traits)
+            traits.sort_by_cached_key(|&def_id| tcx.def_path_hash(def_id));
+            tcx.arena.alloc_slice(&traits)
         },
 
         ..*providers

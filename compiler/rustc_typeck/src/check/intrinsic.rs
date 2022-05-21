@@ -129,7 +129,7 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
                 ty::INNERMOST,
                 ty::BoundRegion { var: ty::BoundVar::from_u32(1), kind: ty::BrEnv },
             ));
-            let va_list_ty = tcx.type_of(did).subst(tcx, &[region.into()]);
+            let va_list_ty = tcx.bound_type_of(did).subst(tcx, &[region.into()]);
             (tcx.mk_ref(env_region, ty::TypeAndMut { ty: va_list_ty, mutbl }), va_list_ty)
         })
     };
@@ -304,6 +304,9 @@ pub fn check_intrinsic_type(tcx: TyCtxt<'_>, it: &hir::ForeignItem<'_>) {
 
             sym::ptr_offset_from => {
                 (1, vec![tcx.mk_imm_ptr(param(0)), tcx.mk_imm_ptr(param(0))], tcx.types.isize)
+            }
+            sym::ptr_offset_from_unsigned => {
+                (1, vec![tcx.mk_imm_ptr(param(0)), tcx.mk_imm_ptr(param(0))], tcx.types.usize)
             }
             sym::unchecked_div | sym::unchecked_rem | sym::exact_div => {
                 (1, vec![param(0), param(0)], param(0))

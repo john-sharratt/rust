@@ -551,7 +551,7 @@ impl MissingDoc {
             }
         }
 
-        let attrs = cx.tcx.get_attrs(def_id.to_def_id());
+        let attrs = cx.tcx.hir().attrs(cx.tcx.hir().local_def_id_to_hir_id(def_id));
         let has_doc = attrs.iter().any(has_doc);
         if !has_doc {
             cx.struct_span_lint(
@@ -1252,7 +1252,6 @@ declare_lint_pass!(MutableTransmutes => [MUTABLE_TRANSMUTES]);
 
 impl<'tcx> LateLintPass<'tcx> for MutableTransmutes {
     fn check_expr(&mut self, cx: &LateContext<'_>, expr: &hir::Expr<'_>) {
-        use rustc_target::spec::abi::Abi::RustIntrinsic;
         if let Some((&ty::Ref(_, _, from_mt), &ty::Ref(_, _, to_mt))) =
             get_transmute_from_to(cx, expr).map(|(ty1, ty2)| (ty1.kind(), ty2.kind()))
         {
@@ -1287,8 +1286,7 @@ impl<'tcx> LateLintPass<'tcx> for MutableTransmutes {
         }
 
         fn def_id_is_transmute(cx: &LateContext<'_>, def_id: DefId) -> bool {
-            cx.tcx.fn_sig(def_id).abi() == RustIntrinsic
-                && cx.tcx.item_name(def_id) == sym::transmute
+            cx.tcx.is_intrinsic(def_id) && cx.tcx.item_name(def_id) == sym::transmute
         }
     }
 }
@@ -2738,11 +2736,7 @@ impl ClashingExternDeclarations {
                 // bottleneck, this does just fine.
                 (
                     overridden_link_name,
-                    tcx.get_attrs(fi.def_id.to_def_id())
-                        .iter()
-                        .find(|at| at.has_name(sym::link_name))
-                        .unwrap()
-                        .span,
+                    tcx.get_attr(fi.def_id.to_def_id(), sym::link_name).unwrap().span,
                 )
             })
         {

@@ -13,7 +13,7 @@ use rustc_middle::mir::pretty::display_allocation;
 use rustc_middle::traits::Reveal;
 use rustc_middle::ty::layout::LayoutOf;
 use rustc_middle::ty::print::with_no_trimmed_paths;
-use rustc_middle::ty::{self, subst::Subst, TyCtxt};
+use rustc_middle::ty::{self, subst::Subst, EarlyBinder, TyCtxt};
 use rustc_span::source_map::Span;
 use rustc_target::abi::{self, Abi};
 use std::borrow::Cow;
@@ -47,7 +47,7 @@ fn eval_body_using_ecx<'mir, 'tcx>(
         "Unexpected DefKind: {:?}",
         ecx.tcx.def_kind(cid.instance.def_id())
     );
-    let layout = ecx.layout_of(body.return_ty().subst(tcx, cid.instance.substs))?;
+    let layout = ecx.layout_of(EarlyBinder(body.return_ty()).subst(tcx, cid.instance.substs))?;
     assert!(!layout.is_unsized());
     let ret = ecx.allocate(layout, MemoryKind::Stack)?;
 
@@ -135,7 +135,7 @@ pub(super) fn op_to_const<'tcx>(
     } else {
         // It is guaranteed that any non-slice scalar pair is actually ByRef here.
         // When we come back from raw const eval, we are always by-ref. The only way our op here is
-        // by-val is if we are in destructure_const, i.e., if this is (a field of) something that we
+        // by-val is if we are in destructure_mir_constant, i.e., if this is (a field of) something that we
         // "tried to make immediate" before. We wouldn't do that for non-slice scalar pairs or
         // structs containing such.
         op.try_as_mplace()

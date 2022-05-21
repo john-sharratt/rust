@@ -1320,8 +1320,21 @@ pub struct Let<'hir> {
 #[derive(Debug, HashStable_Generic)]
 pub enum Guard<'hir> {
     If(&'hir Expr<'hir>),
-    // FIXME use hir::Let for this.
-    IfLet(&'hir Pat<'hir>, &'hir Expr<'hir>),
+    IfLet(&'hir Let<'hir>),
+}
+
+impl<'hir> Guard<'hir> {
+    /// Returns the body of the guard
+    ///
+    /// In other words, returns the e in either of the following:
+    ///
+    /// - `if e`
+    /// - `if let x = e`
+    pub fn body(&self) -> &'hir Expr<'hir> {
+        match self {
+            Guard::If(e) | Guard::IfLet(Let { init: e, .. }) => e,
+        }
+    }
 }
 
 #[derive(Debug, HashStable_Generic)]
@@ -2129,7 +2142,7 @@ pub struct FnSig<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct TraitItemId {
     pub def_id: LocalDefId,
 }
@@ -2192,7 +2205,7 @@ pub enum TraitItemKind<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct ImplItemId {
     pub def_id: LocalDefId,
 }
@@ -2787,7 +2800,7 @@ impl<'hir> VariantData<'hir> {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, Hash, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, Hash, HashStable_Generic)]
 pub struct ItemId {
     pub def_id: LocalDefId,
 }
@@ -3034,7 +3047,7 @@ pub enum AssocItemKind {
 // The bodies for items are stored "out of line", in a separate
 // hashmap in the `Crate`. Here we just record the hir-id of the item
 // so it can fetched later.
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Debug, HashStable_Generic)]
+#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
 pub struct ForeignItemId {
     pub def_id: LocalDefId,
 }

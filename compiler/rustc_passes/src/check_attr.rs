@@ -23,6 +23,7 @@ use rustc_session::lint::builtin::{
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_span::{Span, DUMMY_SP};
+use rustc_target::spec::abi::Abi;
 use std::collections::hash_map::Entry;
 
 pub(crate) fn target_from_impl_item<'tcx>(
@@ -831,7 +832,7 @@ impl CheckAttrVisitor<'_> {
             let parent_hir_id = self.tcx.hir().get_parent_item(hir_id);
             let containing_item = self.tcx.hir().expect_item(parent_hir_id);
 
-            if Target::from_item(containing_item) == Target::Impl {
+            if let hir::ItemKind::Impl(hir::Impl { of_trait: Some(_), .. }) = containing_item.kind {
                 let meta_items = attr.meta_item_list().unwrap();
 
                 let (span, replacement_span) = if meta_items.len() == 1 {
@@ -1317,22 +1318,27 @@ impl CheckAttrVisitor<'_> {
 
     /// Checks if `#[link]` is applied to an item other than a foreign module.
     fn check_link(&self, hir_id: HirId, attr: &Attribute, span: Span, target: Target) {
-        match target {
-            Target::ForeignMod => {}
-            _ => {
-                self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
-                    let mut diag = lint.build("attribute should be applied to an `extern` block");
-                    diag.warn(
-                        "this was previously accepted by the compiler but is \
-                         being phased out; it will become a hard error in \
-                         a future release!",
-                    );
-
-                    diag.span_label(span, "not an `extern` block");
-                    diag.emit();
-                });
-            }
+        if target == Target::ForeignMod
+            && let hir::Node::Item(item) = self.tcx.hir().get(hir_id)
+            && let Item { kind: ItemKind::ForeignMod { abi, .. }, .. } = item
+            && !matches!(abi, Abi::Rust | Abi::RustIntrinsic | Abi::PlatformIntrinsic)
+        {
+            return;
         }
+
+        self.tcx.struct_span_lint_hir(UNUSED_ATTRIBUTES, hir_id, attr.span, |lint| {
+            let mut diag =
+                lint.build("attribute should be applied to an `extern` block with non-Rust ABI");
+            diag.warn(
+                "this was previously accepted by the compiler but is \
+                 being phased out; it will become a hard error in \
+                 a future release!",
+            );
+            if target != Target::ForeignMod {
+                diag.span_label(span, "not an `extern` block");
+            }
+            diag.emit();
+        });
     }
 
     /// Checks if `#[link_name]` is applied to an item other than a foreign function or static.
@@ -2384,7 +2390,7 @@ fn check_non_exported_macro_for_invalid_attrs(tcx: TyCtxt<'_>, item: &Item<'_>) 
 
 fn check_mod_attrs(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
     let check_attr_visitor = &mut CheckAttrVisitor { tcx };
-    tcx.hir().visit_item_likes_in_module(module_def_id, &mut check_attr_visitor.as_deep_visitor());
+    tcx.hir().deep_visit_item_likes_in_module(module_def_id, check_attr_visitor);
     if module_def_id.is_top_level_module() {
         check_attr_visitor.check_attributes(CRATE_HIR_ID, DUMMY_SP, Target::Mod, None);
         check_invalid_crate_level_attr(tcx, tcx.hir().krate_attrs());

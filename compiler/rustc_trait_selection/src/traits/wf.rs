@@ -294,30 +294,22 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
         let obligations = self.nominal_obligations(trait_ref.def_id, trait_ref.substs);
 
         debug!("compute_trait_ref obligations {:?}", obligations);
-        let cause = self.cause(traits::MiscObligation);
         let param_env = self.param_env;
         let depth = self.recursion_depth;
 
         let item = self.item;
 
-        let extend = |obligation: traits::PredicateObligation<'tcx>| {
-            let mut cause = cause.clone();
-            if let Some(parent_trait_pred) = obligation.predicate.to_opt_poly_trait_pred() {
-                let derived_cause = traits::DerivedObligationCause {
+        let extend = |traits::PredicateObligation { predicate, mut cause, .. }| {
+            if let Some(parent_trait_pred) = predicate.to_opt_poly_trait_pred() {
+                cause = cause.derived_cause(
                     parent_trait_pred,
-                    parent_code: obligation.cause.clone_code(),
-                };
-                *cause.make_mut_code() =
-                    traits::ObligationCauseCode::DerivedObligation(derived_cause);
+                    traits::ObligationCauseCode::DerivedObligation,
+                );
             }
             extend_cause_with_original_assoc_item_obligation(
-                tcx,
-                trait_ref,
-                item,
-                &mut cause,
-                obligation.predicate,
+                tcx, trait_ref, item, &mut cause, predicate,
             );
-            traits::Obligation::with_depth(cause, depth, param_env, obligation.predicate)
+            traits::Obligation::with_depth(cause, depth, param_env, predicate)
         };
 
         if let Elaborate::All = elaborate {
@@ -339,17 +331,17 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                 })
                 .filter(|(_, arg)| !arg.has_escaping_bound_vars())
                 .map(|(i, arg)| {
-                    let mut new_cause = cause.clone();
+                    let mut cause = traits::ObligationCause::misc(self.span, self.body_id);
                     // The first subst is the self ty - use the correct span for it.
                     if i == 0 {
                         if let Some(hir::ItemKind::Impl(hir::Impl { self_ty, .. })) =
                             item.map(|i| &i.kind)
                         {
-                            new_cause.span = self_ty.span;
+                            cause.span = self_ty.span;
                         }
                     }
                     traits::Obligation::with_depth(
-                        new_cause,
+                        cause,
                         depth,
                         param_env,
                         ty::Binder::dummy(ty::PredicateKind::WellFormed(arg)).to_predicate(tcx),
@@ -575,7 +567,7 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     // generators don't take arguments.
                 }
 
-                ty::Closure(_, substs) => {
+                ty::Closure(did, substs) => {
                     // Only check the upvar types for WF, not the rest
                     // of the types within. This is needed because we
                     // capture the signature and it may not be WF
@@ -596,18 +588,26 @@ impl<'a, 'tcx> WfPredicates<'a, 'tcx> {
                     // probably always be WF, because it should be
                     // shorthand for something like `where(T: 'a) {
                     // fn(&'a T) }`, as discussed in #25860.
-                    //
-                    // Note that we are also skipping the generic
-                    // types. This is consistent with the `outlives`
-                    // code, but anyway doesn't matter: within the fn
+                    walker.skip_current_subtree(); // subtree handled below
+                    // FIXME(eddyb) add the type to `walker` instead of recursing.
+                    self.compute(substs.as_closure().tupled_upvars_ty().into());
+                    // Note that we cannot skip the generic types
+                    // types. Normally, within the fn
                     // body where they are created, the generics will
                     // always be WF, and outside of that fn body we
                     // are not directly inspecting closure types
                     // anyway, except via auto trait matching (which
                     // only inspects the upvar types).
-                    walker.skip_current_subtree(); // subtree handled below
-                    // FIXME(eddyb) add the type to `walker` instead of recursing.
-                    self.compute(substs.as_closure().tupled_upvars_ty().into());
+                    // But when a closure is part of a type-alias-impl-trait
+                    // then the function that created the defining site may
+                    // have had more bounds available than the type alias
+                    // specifies. This may cause us to have a closure in the
+                    // hidden type that is not actually well formed and
+                    // can cause compiler crashes when the user abuses unsafe
+                    // code to procure such a closure.
+                    // See src/test/ui/type-alias-impl-trait/wf_check_closures.rs
+                    let obligations = self.nominal_obligations(did, substs);
+                    self.out.extend(obligations);
                 }
 
                 ty::FnPtr(_) => {

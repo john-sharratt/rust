@@ -3,7 +3,7 @@ use std::mem;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::{CrateNum, DefId};
 use rustc_middle::middle::privacy::AccessLevels;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt};
 use rustc_span::{sym, Symbol};
 
 use crate::clean::{self, types::ExternalLocation, ExternalCrate, ItemId, PrimitiveType};
@@ -288,14 +288,7 @@ impl<'a, 'tcx> DocFolder for CacheBuilder<'a, 'tcx> {
                             // for where the type was defined. On the other
                             // hand, `paths` always has the right
                             // information if present.
-                            Some(&(
-                                ref fqp,
-                                ItemType::Trait
-                                | ItemType::Struct
-                                | ItemType::Union
-                                | ItemType::Enum,
-                            )) => Some(&fqp[..fqp.len() - 1]),
-                            Some(..) => Some(&*self.cache.stack),
+                            Some(&(ref fqp, _)) => Some(&fqp[..fqp.len() - 1]),
                             None => None,
                         };
                         ((Some(*last), path), true)
@@ -459,6 +452,15 @@ impl<'a, 'tcx> DocFolder for CacheBuilder<'a, 'tcx> {
                 clean::Type::Path { ref path }
                 | clean::BorrowedRef { type_: box clean::Type::Path { ref path }, .. } => {
                     dids.insert(path.def_id());
+                    if let Some(generics) = path.generics() &&
+                        let ty::Adt(adt, _) = self.tcx.type_of(path.def_id()).kind() &&
+                        adt.is_fundamental() {
+                        for ty in generics {
+                            if let Some(did) = ty.def_id(&self.cache) {
+                                dids.insert(did);
+                            }
+                        }
+                    }
                 }
                 clean::DynTrait(ref bounds, _)
                 | clean::BorrowedRef { type_: box clean::DynTrait(ref bounds, _), .. } => {

@@ -40,6 +40,7 @@ crate fn early_resolve_intra_doc_links(
         traits_in_scope: Default::default(),
         all_traits: Default::default(),
         all_trait_impls: Default::default(),
+        all_macro_rules: Default::default(),
         document_private_items,
     };
 
@@ -64,7 +65,7 @@ crate fn early_resolve_intra_doc_links(
         traits_in_scope: link_resolver.traits_in_scope,
         all_traits: Some(link_resolver.all_traits),
         all_trait_impls: Some(link_resolver.all_trait_impls),
-        all_macro_rules: link_resolver.resolver.take_all_macro_rules(),
+        all_macro_rules: link_resolver.all_macro_rules,
     }
 }
 
@@ -82,6 +83,7 @@ struct EarlyDocLinkResolver<'r, 'ra> {
     traits_in_scope: DefIdMap<Vec<TraitCandidate>>,
     all_traits: Vec<DefId>,
     all_trait_impls: Vec<DefId>,
+    all_macro_rules: FxHashMap<Symbol, Res<ast::NodeId>>,
     document_private_items: bool,
 }
 
@@ -134,24 +136,21 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
                 // using privacy, private traits and impls from other crates are never documented in
                 // the current crate, and links in their doc comments are not resolved.
                 for &def_id in &all_traits {
-                    if self.resolver.cstore().visibility_untracked(def_id) == Visibility::Public {
+                    if self.resolver.cstore().visibility_untracked(def_id).is_public() {
                         self.resolve_doc_links_extern_impl(def_id, false);
                     }
                 }
                 for &(trait_def_id, impl_def_id, simplified_self_ty) in &all_trait_impls {
-                    if self.resolver.cstore().visibility_untracked(trait_def_id)
-                        == Visibility::Public
+                    if self.resolver.cstore().visibility_untracked(trait_def_id).is_public()
                         && simplified_self_ty.and_then(|ty| ty.def()).map_or(true, |ty_def_id| {
-                            self.resolver.cstore().visibility_untracked(ty_def_id)
-                                == Visibility::Public
+                            self.resolver.cstore().visibility_untracked(ty_def_id).is_public()
                         })
                     {
                         self.resolve_doc_links_extern_impl(impl_def_id, false);
                     }
                 }
                 for (ty_def_id, impl_def_id) in all_inherent_impls {
-                    if self.resolver.cstore().visibility_untracked(ty_def_id) == Visibility::Public
-                    {
+                    if self.resolver.cstore().visibility_untracked(ty_def_id).is_public() {
                         self.resolve_doc_links_extern_impl(impl_def_id, true);
                     }
                 }
@@ -173,16 +172,26 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
     }
 
     fn resolve_doc_links_extern_impl(&mut self, def_id: DefId, is_inherent: bool) {
-        self.resolve_doc_links_extern_outer(def_id, def_id);
+        self.resolve_doc_links_extern_outer_fixme(def_id, def_id);
         let assoc_item_def_ids = Vec::from_iter(
             self.resolver.cstore().associated_item_def_ids_untracked(def_id, self.sess),
         );
         for assoc_def_id in assoc_item_def_ids {
-            if !is_inherent
-                || self.resolver.cstore().visibility_untracked(assoc_def_id) == Visibility::Public
+            if !is_inherent || self.resolver.cstore().visibility_untracked(assoc_def_id).is_public()
             {
-                self.resolve_doc_links_extern_outer(assoc_def_id, def_id);
+                self.resolve_doc_links_extern_outer_fixme(assoc_def_id, def_id);
             }
+        }
+    }
+
+    // FIXME: replace all uses with `resolve_doc_links_extern_outer` to actually resolve links, not
+    // just add traits in scope. This may be expensive and require benchmarking and optimization.
+    fn resolve_doc_links_extern_outer_fixme(&mut self, def_id: DefId, scope_id: DefId) {
+        if !self.resolver.cstore().may_have_doc_links_untracked(def_id) {
+            return;
+        }
+        if let Some(parent_id) = self.resolver.opt_parent(scope_id) {
+            self.add_traits_in_scope(parent_id);
         }
     }
 
@@ -190,18 +199,23 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
         if !self.resolver.cstore().may_have_doc_links_untracked(def_id) {
             return;
         }
-        // FIXME: actually resolve links, not just add traits in scope.
-        if let Some(parent_id) = self.resolver.opt_parent(scope_id) {
-            self.add_traits_in_scope(parent_id);
-        }
+        let attrs = Vec::from_iter(self.resolver.cstore().item_attrs_untracked(def_id, self.sess));
+        let parent_scope = ParentScope::module(
+            self.resolver.get_nearest_non_block_module(
+                self.resolver.opt_parent(scope_id).unwrap_or(scope_id),
+            ),
+            self.resolver,
+        );
+        self.resolve_doc_links(doc_attrs(attrs.iter()), parent_scope);
     }
 
     fn resolve_doc_links_extern_inner(&mut self, def_id: DefId) {
         if !self.resolver.cstore().may_have_doc_links_untracked(def_id) {
             return;
         }
-        // FIXME: actually resolve links, not just add traits in scope.
-        self.add_traits_in_scope(def_id);
+        let attrs = Vec::from_iter(self.resolver.cstore().item_attrs_untracked(def_id, self.sess));
+        let parent_scope = ParentScope::module(self.resolver.expect_module(def_id), self.resolver);
+        self.resolve_doc_links(doc_attrs(attrs.iter()), parent_scope);
     }
 
     fn resolve_doc_links_local(&mut self, attrs: &[ast::Attribute]) {
@@ -255,9 +269,16 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
                         }
                     }
 
-                    // FIXME: Resolve all prefixes for type-relative resolution or for diagnostics.
-                    if (need_assoc || !any_resolved) && pinfo.path_str.contains("::") {
-                        need_traits_in_scope = true;
+                    // Resolve all prefixes for type-relative resolution or for diagnostics.
+                    if need_assoc || !any_resolved {
+                        let mut path = &pinfo.path_str[..];
+                        while let Some(idx) = path.rfind("::") {
+                            path = &path[..idx];
+                            need_traits_in_scope = true;
+                            for ns in [TypeNS, ValueNS, MacroNS] {
+                                self.resolve_and_cache(path, ns, &parent_scope);
+                            }
+                        }
                     }
                 }
             }
@@ -279,7 +300,7 @@ impl<'ra> EarlyDocLinkResolver<'_, 'ra> {
 
         for child in self.resolver.module_children_or_reexports(module_id) {
             // This condition should give a superset of `denied` from `fn clean_use_statement`.
-            if child.vis == Visibility::Public
+            if child.vis.is_public()
                 || self.document_private_items
                     && child.vis != Visibility::Restricted(module_id)
                     && module_id.is_local()
@@ -343,8 +364,10 @@ impl Visitor<'_> for EarlyDocLinkResolver<'_, '_> {
                     self.all_trait_impls.push(self.resolver.local_def_id(item.id).to_def_id());
                 }
                 ItemKind::MacroDef(macro_def) if macro_def.macro_rules => {
-                    self.parent_scope.macro_rules =
+                    let (macro_rules_scope, res) =
                         self.resolver.macro_rules_scope(self.resolver.local_def_id(item.id));
+                    self.parent_scope.macro_rules = macro_rules_scope;
+                    self.all_macro_rules.insert(item.ident.name, res);
                 }
                 _ => {}
             }

@@ -122,7 +122,8 @@ use once_cell::sync::OnceCell;
 use crate::builder::Kind;
 use crate::config::{LlvmLibunwind, TargetSelection};
 use crate::util::{
-    exe, libdir, mtime, output, run, run_suppressed, t, try_run, try_run_suppressed, CiEnv,
+    check_run, exe, libdir, mtime, output, run, run_suppressed, t, try_run, try_run_suppressed,
+    CiEnv,
 };
 
 mod builder;
@@ -961,6 +962,17 @@ impl Build {
         try_run_suppressed(cmd)
     }
 
+    /// Runs a command, printing out nice contextual information if it fails.
+    /// Returns false if do not execute at all, otherwise returns its
+    /// `status.success()`.
+    fn check_run(&self, cmd: &mut Command) -> bool {
+        if self.config.dry_run {
+            return true;
+        }
+        self.verbose(&format!("running: {:?}", cmd));
+        check_run(cmd, self.is_verbose())
+    }
+
     pub fn is_verbose(&self) -> bool {
         self.verbosity > 0
     }
@@ -1497,14 +1509,20 @@ impl Build {
         let dst = dstdir.join(src.file_name().unwrap());
         self.verbose_than(1, &format!("Install {:?} to {:?}", src, dst));
         t!(fs::create_dir_all(dstdir));
+        drop(fs::remove_file(&dst));
         {
             if !src.exists() {
                 panic!("Error: File \"{}\" not found!", src.display());
             }
-            self.copy(src, &dst);
+            let metadata = t!(src.symlink_metadata());
+            if let Err(e) = fs::copy(&src, &dst) {
+                panic!("failed to copy `{}` to `{}`: {}", src.display(), dst.display(), e)
+            }
+            t!(fs::set_permissions(&dst, metadata.permissions()));
+            let atime = FileTime::from_last_access_time(&metadata);
+            let mtime = FileTime::from_last_modification_time(&metadata);
+            t!(filetime::set_file_times(&dst, atime, mtime));
         }
-        // NOTE: when using hard-links, this will also update the permissions on the original file.
-        // We never use permissions that are more restrictive than the original, so this shouldn't cause any issues.
         chmod(&dst, perms);
     }
 

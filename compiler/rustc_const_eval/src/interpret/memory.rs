@@ -770,7 +770,9 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 if reachable.insert(id) {
                     // This is a new allocation, add its relocations to `todo`.
                     if let Some((_, alloc)) = self.memory.alloc_map.get(id) {
-                        todo.extend(alloc.relocations().values().map(|tag| tag.get_alloc_id()));
+                        todo.extend(
+                            alloc.relocations().values().filter_map(|tag| tag.get_alloc_id()),
+                        );
                     }
                 }
             }
@@ -805,7 +807,7 @@ impl<'a, 'mir, 'tcx, M: Machine<'mir, 'tcx>> std::fmt::Debug for DumpAllocs<'a, 
             allocs_to_print: &mut VecDeque<AllocId>,
             alloc: &Allocation<Tag, Extra>,
         ) -> std::fmt::Result {
-            for alloc_id in alloc.relocations().values().map(|tag| tag.get_alloc_id()) {
+            for alloc_id in alloc.relocations().values().filter_map(|tag| tag.get_alloc_id()) {
                 allocs_to_print.push_back(alloc_id);
             }
             write!(fmt, "{}", display_allocation(tcx, alloc))
@@ -922,10 +924,15 @@ impl<'tcx, 'a, Tag: Provenance, Extra> AllocRef<'a, 'tcx, Tag, Extra> {
         self.read_scalar(alloc_range(offset, self.tcx.data_layout().pointer_size))
     }
 
-    pub fn check_bytes(&self, range: AllocRange, allow_uninit_and_ptr: bool) -> InterpResult<'tcx> {
+    pub fn check_bytes(
+        &self,
+        range: AllocRange,
+        allow_uninit: bool,
+        allow_ptr: bool,
+    ) -> InterpResult<'tcx> {
         Ok(self
             .alloc
-            .check_bytes(&self.tcx, self.range.subrange(range), allow_uninit_and_ptr)
+            .check_bytes(&self.tcx, self.range.subrange(range), allow_uninit, allow_ptr)
             .map_err(|e| e.to_interp_error(self.alloc_id))?)
     }
 }
@@ -1142,11 +1149,7 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
                 Err(ptr) => ptr.into(),
                 Ok(bits) => {
                     let addr = u64::try_from(bits).unwrap();
-                    let ptr = M::ptr_from_addr(&self, addr);
-                    if addr == 0 {
-                        assert!(ptr.provenance.is_none(), "null pointer can never have an AllocId");
-                    }
-                    ptr
+                    M::ptr_from_addr_transmute(&self, addr)
                 }
             },
         )
@@ -1182,10 +1185,14 @@ impl<'mir, 'tcx: 'mir, M: Machine<'mir, 'tcx>> InterpCx<'mir, 'tcx, M> {
         ptr: Pointer<Option<M::PointerTag>>,
     ) -> Result<(AllocId, Size, M::TagExtra), u64> {
         match ptr.into_pointer_or_addr() {
-            Ok(ptr) => {
-                let (alloc_id, offset, extra) = M::ptr_get_alloc(self, ptr);
-                Ok((alloc_id, offset, extra))
-            }
+            Ok(ptr) => match M::ptr_get_alloc(self, ptr) {
+                Some((alloc_id, offset, extra)) => Ok((alloc_id, offset, extra)),
+                None => {
+                    assert!(M::PointerTag::OFFSET_IS_ADDR);
+                    let (_, addr) = ptr.into_parts();
+                    Err(addr.bytes())
+                }
+            },
             Err(addr) => Err(addr.bytes()),
         }
     }

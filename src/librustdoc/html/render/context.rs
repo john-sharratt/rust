@@ -596,9 +596,21 @@ impl<'tcx> FormatRenderer<'tcx> for Context<'tcx> {
             |buf: &mut Buffer| {
                 write!(
                     buf,
-                    "<script defer src=\"{}settings{}.js\"></script>",
-                    page.static_root_path.unwrap_or(""),
-                    page.resource_suffix
+                    "<div class=\"main-heading\">\
+                     <h1 class=\"fqn\">\
+                         <span class=\"in-band\">Rustdoc settings</span>\
+                     </h1>\
+                     <span class=\"out-of-band\">\
+                         <a id=\"back\" href=\"javascript:void(0)\" onclick=\"history.back();\">\
+                            Back\
+                        </a>\
+                     </span>\
+                     </div>\
+                     <link rel=\"stylesheet\" type=\"text/css\" \
+                         href=\"{root_path}settings{suffix}.css\">\
+                     <script defer src=\"{root_path}settings{suffix}.js\"></script>",
+                    root_path = page.static_root_path.unwrap_or(""),
+                    suffix = page.resource_suffix,
                 )
             },
             &self.shared.style_files,
