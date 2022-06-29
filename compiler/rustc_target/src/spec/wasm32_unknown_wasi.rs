@@ -1,4 +1,4 @@
-//! The `wasm32-wasi` target is a new and still (as of April 2019) an
+//! The `wasm32-unknown-wasi` target is a new and still (as of April 2019) an
 //! experimental target. The definition in this file is likely to be tweaked
 //! over time and shouldn't be relied on too much.
 //!
@@ -13,12 +13,12 @@
 //! serve two use cases here with this target:
 //!
 //! * First, we want Rust usage of the target to be as hassle-free as possible,
-//!   ideally avoiding the need to configure and install a local wasm32-wasi
+//!   ideally avoiding the need to configure and install a local wasm32-unknown-wasi
 //!   toolchain.
 //!
 //! * Second, one of the primary use cases of LLVM's new wasm backend and the
 //!   wasm support in LLD is that any compiled language can interoperate with
-//!   any other. To that the `wasm32-wasi` target is the first with a viable C
+//!   any other. To that the `wasm32-unknown-wasi` target is the first with a viable C
 //!   standard library and sysroot common definition, so we want Rust and C/C++
 //!   code to interoperate when compiled to `wasm32-unknown-unknown`.
 //!
@@ -39,7 +39,7 @@
 //! necessary.
 //!
 //! All in all, by default, no external dependencies are required. You can
-//! compile `wasm32-wasi` binaries straight out of the box. You can't, however,
+//! compile `wasm32-unknown-wasi` binaries straight out of the box. You can't, however,
 //! reliably interoperate with C code in this mode (yet).
 //!
 //! ## Interop with C required
@@ -53,7 +53,7 @@
 //!
 //! 2. If you're using rustc to build a linked artifact then you'll need to
 //!    specify `-C linker` to a `clang` binary that supports
-//!    `wasm32-wasi` and is configured with the `wasm32-wasi` sysroot. This
+//!    `wasm32-unknown-wasi` and is configured with the `wasm32-unknown-wasi` sysroot. This
 //!    will cause Rust code to be linked against the libc.a that the specified
 //!    `clang` provides.
 //!
@@ -62,7 +62,7 @@
 //!
 //! You can configure the linker via Cargo using the
 //! `CARGO_TARGET_WASM32_WASI_LINKER` env var. Be sure to also set
-//! `CC_wasm32-wasi` if any crates in the dependency graph are using the `cc`
+//! `CC_wasm32-unknown-wasi` if any crates in the dependency graph are using the `cc`
 //! crate.
 //!
 //! ## Remember, this is all in flux
@@ -84,7 +84,7 @@ pub fn target() -> Target {
         .pre_link_args
         .entry(LinkerFlavor::Gcc)
         .or_insert(Vec::new())
-        .push("--target=wasm32-wasi".into());
+        .push("--target=wasm32-unknown-wasi".into());
 
     options.pre_link_objects_fallback = crt_objects::pre_wasi_fallback();
     options.post_link_objects_fallback = crt_objects::post_wasi_fallback();
@@ -107,7 +107,7 @@ pub fn target() -> Target {
     options.main_needs_argc_argv = false;
 
     Target {
-        llvm_target: "wasm32-wasi".into(),
+        llvm_target: "wasm32-unknown-wasi".into(),
         pointer_width: 32,
         data_layout: "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20".into(),
         arch: "wasm32".into(),

@@ -101,7 +101,7 @@ ENV CARGO_TARGET_AARCH64_FUCHSIA_RUSTFLAGS \
 ENV TARGETS=x86_64-fuchsia
 ENV TARGETS=$TARGETS,aarch64-fuchsia
 ENV TARGETS=$TARGETS,wasm32-unknown-unknown
-ENV TARGETS=$TARGETS,wasm32-wasi
+ENV TARGETS=$TARGETS,wasm32-unknown-wasi
 ENV TARGETS=$TARGETS,sparcv9-sun-solaris
 ENV TARGETS=$TARGETS,x86_64-pc-solaris
 ENV TARGETS=$TARGETS,x86_64-sun-solaris
@@ -120,7 +120,7 @@ ENV TARGETS=$TARGETS,x86_64-unknown-none
 RUN ln -s /usr/include/asm-generic /usr/local/include/asm
 
 ENV RUST_CONFIGURE_ARGS --enable-extended --enable-lld --disable-docs \
-  --set target.wasm32-wasi.wasi-root=/wasm32-wasi \
+  --set target.wasm32-unknown-wasi.wasi-root=/wasm32-wasi \
   --musl-root-armv7=/musl-armv7
 
 ENV SCRIPT python3 ../x.py dist --host='' --target $TARGETS

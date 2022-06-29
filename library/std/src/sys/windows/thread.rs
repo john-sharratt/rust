@@ -76,6 +76,11 @@ impl Thread {
         }
     }
 
+    pub unsafe fn new_reactor<F>(p: F) -> io::Result<Thread>
+    where F: Fn() + Send + Sync + 'static {
+        unsupported()
+    }
+
     pub fn yield_now() {
         // This function will return 0 if there are no other threads to execute,
         // but this also means that the yield was useless so this isn't really a

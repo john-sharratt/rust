@@ -1,7 +1,7 @@
-//! Platform-specific extensions to `std` for the WebAssembly System Interface (WASI).
+//! Platform-specific extensions to `std` for the WebAssembly System Interface (WASIX).
 //!
-//! Provides access to platform-level information on WASI, and exposes
-//! WASI-specific functions that would otherwise be inappropriate as
+//! Provides access to platform-level information on WASIX, and exposes
+//! WASIX-specific functions that would otherwise be inappropriate as
 //! part of the core `std` library.
 //!
 //! It exposes more ways to deal with platform-specific strings (`OsStr`,
@@ -32,10 +32,14 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc(cfg(target_os = "wasi"))]
 
+#[path = "../wasi/ffi.rs"]
 pub mod ffi;
+#[path = "../wasi/fs.rs"]
 pub mod fs;
+#[path = "../wasi/io/mod.rs"]
 pub mod io;
 pub mod net;
+#[path = "../wasi/process.rs"]
 pub mod process;
 
 /// A prelude for conveniently writing platform-specific code.

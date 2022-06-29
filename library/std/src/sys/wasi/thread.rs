@@ -17,6 +17,11 @@ impl Thread {
         unsupported()
     }
 
+    pub unsafe fn new_reactor<F>(p: F) -> io::Result<Thread>
+    where F: Fn() + Send + Sync + 'static {
+        unsupported()
+    }
+
     pub fn yield_now() {
         let ret = unsafe { wasi::sched_yield() };
         debug_assert_eq!(ret, Ok(()));

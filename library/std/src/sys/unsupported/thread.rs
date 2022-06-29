@@ -14,6 +14,11 @@ impl Thread {
         unsupported()
     }
 
+    pub unsafe fn new_reactor<F>(_p: F) -> io::Result<Thread>
+    where F: Fn() + Send + Sync + 'static {
+        unsupported()
+    }
+
     pub fn yield_now() {
         // do nothing
     }

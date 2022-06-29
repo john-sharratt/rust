@@ -217,6 +217,10 @@
     all(target_vendor = "fortanix", target_env = "sgx"),
     feature(slice_index_methods, coerce_unsized, sgx_platform)
 )]
+#![cfg_attr(
+    all(target_vendor = "wasmer"),
+    feature(simd_wasm64)
+)]
 #![deny(rustc::existing_doc_keyword)]
 //
 // Language features:

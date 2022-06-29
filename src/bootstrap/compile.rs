@@ -231,12 +231,20 @@ fn copy_self_contained_objects(
             target_deps.push((libunwind_path, DependencyType::TargetSelfContained));
         }
     } else if target.ends_with("-wasi") {
-        let srcdir = builder
-            .wasi_root(target)
-            .unwrap_or_else(|| {
-                panic!("Target {:?} does not have a \"wasi-root\" key", target.triple)
-            })
-            .join("lib/wasm32-wasi");
+        let srcdir = {
+            let lib_dir = if target.starts_with("wasm32-") {
+                "lib/wasm32-wasi"
+            } else if target.starts_with("wasm64-") {
+                "lib/wasm64-wasi"
+            } else {
+                panic!("Target {:?} is not supported", target.triple)
+            };
+            builder.wasi_root(target)
+                .unwrap_or_else(|| {
+                    panic!("Target {:?} does not have a \"wasi-root\" key", target.triple)
+                })
+                .join(lib_dir)
+        };
         for &obj in &["libc.a", "crt1-command.o", "crt1-reactor.o"] {
             copy_and_stamp(
                 builder,
@@ -325,7 +333,14 @@ pub fn std_cargo(builder: &Builder<'_>, target: TargetSelection, stage: u32, car
 
         if target.ends_with("-wasi") {
             if let Some(p) = builder.wasi_root(target) {
-                let root = format!("native={}/lib/wasm32-wasi", p.to_str().unwrap());
+                let lib_dir = if target.starts_with("wasm32-") {
+                    "lib/wasm32-wasi"
+                } else if target.starts_with("wasm64-") {
+                    "lib/wasm64-wasi"
+                } else {
+                    panic!("Target {:?} is not supported", target.triple)
+                };
+                let root = format!("native={}/{}", p.to_str().unwrap(), lib_dir);
                 cargo.rustflag("-L").rustflag(&root);
             }
         }

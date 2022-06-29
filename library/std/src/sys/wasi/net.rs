@@ -221,6 +221,10 @@ impl TcpListener {
         ))
     }
 
+    pub fn accept_timeout(&self, _timeout: crate::time::Duration) -> io::Result<(TcpStream, SocketAddr)> {
+        self.accept()
+    }
+
     pub fn duplicate(&self) -> io::Result<TcpListener> {
         unsupported()
     }

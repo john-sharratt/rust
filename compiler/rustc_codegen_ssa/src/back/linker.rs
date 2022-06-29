@@ -1215,8 +1215,17 @@ impl<'a> WasmLd<'a> {
         // * `--export=*tls*` - when `#[thread_local]` symbols are used these
         //   symbols are how the TLS segments are initialized and configured.
         if sess.target_features.contains(&sym::atomics) {
-            cmd.arg("--shared-memory");
-            cmd.arg("--max-memory=1073741824");
+            if sess.target.vendor == "wasmer" {
+                // Wasmer does not use shared-memory but supports large memory sizes
+                if sess.target.pointer_width == 64 {
+                    cmd.arg("--max-memory=1099511627776");
+                } else {
+                    cmd.arg("--max-memory=2147483648");
+                }
+            } else {
+                cmd.arg("--shared-memory");
+                cmd.arg("--max-memory=1073741824");
+            }            
             cmd.arg("--import-memory");
             cmd.arg("--export=__wasm_init_memory");
             cmd.arg("--export=__wasm_init_tls");

@@ -8,7 +8,7 @@ use crate::fmt;
 use crate::fs;
 use crate::marker::PhantomData;
 use crate::mem::forget;
-#[cfg(not(any(target_arch = "wasm32", target_env = "sgx")))]
+#[cfg(not(any(target_family = "wasm", target_env = "sgx")))]
 use crate::sys::cvt;
 use crate::sys_common::{AsInner, FromInner, IntoInner};
 
@@ -78,7 +78,7 @@ impl BorrowedFd<'_> {
 impl OwnedFd {
     /// Creates a new `OwnedFd` instance that shares the same underlying file handle
     /// as the existing `OwnedFd` instance.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     pub fn try_clone(&self) -> crate::io::Result<Self> {
         // We want to atomically duplicate this file descriptor and set the
         // CLOEXEC flag, and currently that's done via F_DUPFD_CLOEXEC. This
@@ -97,7 +97,16 @@ impl OwnedFd {
         Ok(unsafe { Self::from_raw_fd(fd) })
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_family = "wasm", target_vendor = "wasmer"))]
+    pub fn try_clone(&self) -> crate::io::Result<Self> {
+        use crate::sys::err2io;
+        let fd = unsafe {
+            wasi::fd_dup(self.fd as u32).map_err(err2io)?
+        };
+        Ok(unsafe { Self::from_raw_fd(fd as i32) })
+    }
+
+    #[cfg(all(target_family = "wasm", target_vendor = "unknown"))]
     pub fn try_clone(&self) -> crate::io::Result<Self> {
         Err(crate::io::const_io_error!(
             crate::io::ErrorKind::Unsupported,

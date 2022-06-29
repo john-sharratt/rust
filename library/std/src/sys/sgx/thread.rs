@@ -119,6 +119,11 @@ impl Thread {
         task.run()
     }
 
+    pub unsafe fn new_reactor<F>(p: F) -> io::Result<Thread>
+    where F: Fn() + Send + Sync + 'static {
+        unsupported()
+    }
+
     pub fn yield_now() {
         let wait_error = rtunwrap!(Err, usercalls::wait(0, usercalls::raw::WAIT_NO));
         rtassert!(wait_error.kind() == io::ErrorKind::WouldBlock);

@@ -1,7 +1,7 @@
 // check-pass
 #![crate_type = "lib"]
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 mod wasm_non_clash {
     mod a {
         #[link(wasm_import_module = "a")]

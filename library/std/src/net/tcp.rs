@@ -807,8 +807,32 @@ impl TcpListener {
     pub fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
         // On WASM, `TcpStream` is uninhabited (as it's unsupported) and so
         // the `a` variable here is technically unused.
-        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+        #[cfg_attr(all(target_arch = "wasm32", target_vendor = "unknown"), allow(unused_variables))]
         self.0.accept().map(|(a, b)| (TcpStream(a), b))
+    }
+
+    /// Accept a new incoming connection from this listener (or times out).
+    ///
+    /// Unlike other methods on `TcpStream`, this does not correspond to a
+    /// single system call. It instead uses an OS-specific mechanism to await the
+    /// a completion request request, then calls `accept`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::net::TcpListener;
+    /// use std::time::Duration;
+    ///
+    /// let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
+    /// match listener.accept_timeout(Duration::from_secs(10)) {
+    ///     Ok((_socket, addr)) => println!("new client: {addr:?}"),
+    ///     Err(e) => println!("couldn't get client: {e:?}"),
+    /// }
+    /// ```
+    #[stable(feature = "rust1", since = "1.0.0")]
+    pub fn accept_timeout(&self, timeout: crate::time::Duration) -> io::Result<(TcpStream, SocketAddr)> {
+        #[cfg_attr(target_family = "wasm", allow(unused_variables))]
+        self.0.accept_timeout(timeout).map(|(a, b)| (TcpStream(a), b))
     }
 
     /// Returns an iterator over the connections being received on this
